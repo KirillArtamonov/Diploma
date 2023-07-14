@@ -1,0 +1,441 @@
+import math
+from statistics import mean
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from scipy import signal
+from matplotlib.ticker import (MultipleLocator)
+
+
+tau = 0.00055  # интервал усреднения [c]
+h = 0.25*tau  # шаг сетки усреднения [c]
+deltaX = .003  # расстояние между зондами [м]
+tend = 0.21 # окончание разряда[c]
+charge = 39169
+
+elongation = 2
+P_oh = 5 * 10**6
+P_rad = 1 * 10**6
+a = 0.24
+R = 0.36
+#----------------------------------------------------------- основные параметры-----------------------------------------------------------------
+A = np.pi* 6.4e-7 #площадь зонда  [м^2]
+e = 1.60217663e-19#заряд электорна [Кл]
+k= 1.380650424e-23 #постоянная больцмана [Дж/К]
+mi = 1.6735575e-27 #водород [кг]
+#Te = 10 * 11604.51812 #температура в К
+#----------------------------------------------------------------- функции -----------------------------------------------------------------
+def Name (charge):
+    if charge == 39169:
+        name = ["fluc-t-Isat-Vfloat1-Vfloat2-sht39169-1.00_mksec-t2.txt", "d_alpha_lower_dome_39169.txt",
+                "NI42_39169.txt", "Ip_39169.txt", 280000*1.5, 78000, '39169_T(t).txt']
+    elif charge == 42864:
+        name = ["fluc-t-Isat-Vfloat1-Vfloat2-sht42864-0.40_mksec-7.txt", "d_alpha_lower_dome_42864.txt",
+                "NI42_42864.txt", "Ip_42864.txt", 290000*2, 91500, '42864_T(t).txt']
+    elif charge == 42877:
+        name = ["fluc-t-Isat-Vfloat1-Vfloat2-sht42877-0.40_mksec-sa.txt", "d_alpha_lower_dome_42877.txt",
+                "NI42_42877.txt"]
+    elif charge == 42878:
+        name = ["fluc-t-Isat-Vfloat1-Vfloat2-sht42878-0.40_mksec-we.txt", "d_alpha_lower_dome_42878.txt",
+                "NI42_42878.txt"]
+    elif charge == 42935:
+        name = ["fluc-t-Isat-Vfloat1-Vfloat2-sht42935-0.40_mksec-5.txt", "d_alpha_lower_dome_42935.txt",
+                "NI42_42935.txt", "Ip_42935.txt", 295000*2, 80000, '42934_T(t).txt']
+    return (name)
+
+def Data(name):
+    t_all = []
+    phi1 = []
+    phi2 = []
+    I_sat=[]
+
+    phi2_Noise = []
+    phi1_Noise = []
+    Isat_Noise = []
+
+
+    data = np.loadtxt(name)
+
+    # весь временной массив
+    for i in range(len(data)):
+        t_all.append(data[i][0])  # записываем из файла весь временной массив целиком
+
+    #print('fs:', 1/(t_all[1]-t_all[0]))
+    #средний шум
+    t2=np.delete(np.array(t_all), np.where(np.array(t_all) > 0.26 ))
+    t2=np.delete(t2, np.where(t2 < 0.225 ))    #записываем в новый массив ту часть, которая соответствует концу разряда
+
+    if  charge == 39169:
+        meannoise_Isat = 0
+        meannoise_phi1 = 0
+        meannoise_phi2 = 0
+    else:
+        for i in range(t_all.index(t2[0]), t_all.index(t2[len(t2)-1])+1):
+            Isat_Noise.append(data[i][1])
+            phi1_Noise.append(data[i][3])
+            phi2_Noise.append(data[i][2])
+
+        meannoise_Isat = mean(Isat_Noise) #Вычисляем среднюю величину, соответствующую шумам
+        meannoise_phi1 = mean(phi1_Noise) #Вычисляем среднюю величину, соответствующую шумам
+        meannoise_phi2 = mean(phi2_Noise) #Вычисляем среднюю величину, соответствующую шумам
+
+
+    # полезная часть
+    t = np.delete(np.array(t_all), np.where(
+        np.array(t_all) > tend))  # записываем в новый массив ту часть, которая соответствует разряду
+
+    #запись из файла
+    for i in range(len(t)):
+        I_sat.append(data[i][1]-meannoise_Isat)
+        phi1.append(data[i][3]-meannoise_phi1)
+        phi2.append(data[i][2]-meannoise_phi2)
+
+    return ( t, I_sat, phi1, phi2)
+
+def CombData(name):
+    X_all = []
+    Y = []
+    data = np.loadtxt(name)
+    for i in range(len(data)):
+        X_all.append(data[i][0])  # записываем из файла весь временной массив целиком
+    # полезная часть
+    X = np.delete(np.array(X_all), np.where(
+        np.array(X_all) > tend))  # записываем в новый массив ту часть, которая соответствует разряду
+    #запись из файла
+    for i in range(len(X)):
+        Y.append(data[i][1])
+
+    return (X, Y)
+
+def Roll (X, tau, by):
+    win = math.ceil(tau / (X.index[1] - X.index[0]))
+    print("количество точек в окне:",win)
+    if by == 1:
+        roll_x = X.rolling(int(win*0.1), center = True).mean() #вычисляем скользящее среднее плотности
+    else :
+        roll_x = X.rolling(win*1, center = True).mean().iloc[int(0.5* win )- 1::by*1]  # вычисляем скользящее среднее плотности
+        roll_x = roll_x.dropna()
+    return (roll_x)
+
+def PSD (x):
+    x = x.dropna()
+    (f, S) = signal.welch(
+        x = x.values,
+        fs = np.floor(len(x)/(x.index[len(x)-1]-x.index[0])),
+        nperseg=256
+    )
+    X = pd.Series(index = f, data = S)
+    return  (X)
+
+def spec (x):
+    print(x.index[0])
+    f, t, Sxx = signal.spectrogram(
+                                    x = x.values,
+                                    fs = np.floor(len(x)/(x.index[len(x)-1]-x.index[0])),
+                                    window= ('hann'),
+                                    nperseg=2**10,
+                                    #noverlap=4,
+                                    nfft = 2**11,
+                                    scaling = "spectrum",
+                                    mode = "magnitude"
+                                 )
+
+    return (t+x.index[0], f, Sxx)
+
+def Corr(X, Y):
+    win =1000
+    X_mean = X.rolling(window= win , center = True ).mean()
+    Y_mean = Y.rolling(window= win , center = True ).mean()
+    XY_mean =(X*Y).rolling(window= win , center = True ).mean()
+    XX_mean =(X*X).rolling(window= win , center = True ).mean()
+    YY_mean =(Y*Y).rolling(window= win , center = True ).mean()
+    y = (XY_mean -X_mean*Y_mean )/ ( (np.sqrt(XX_mean - X_mean*X_mean))*(np.sqrt(YY_mean - Y_mean*Y_mean)) )
+    return (y)
+
+def Coh_spectr(X, Y, window):
+    X = X.dropna()
+    Y = Y.dropna()
+    fs = 1 / (X.index[1] - X.index[0])
+    t = []
+    F= []
+    f = []
+    Cxy = []
+    print('окно:', window)
+    M = int(len(X) / window)
+    print('количество окон:',M)
+
+    for i in range(M):
+        f_a, cxy = signal.coherence(X.values[i * window:(i + 1) * window - 1], Y.values[i * window:(i + 1) * window - 1], fs = fs, nperseg=int(window/16))
+        #print(max(f_a))
+        F.append(f_a)
+        Cxy.append(cxy)
+        t.append(np.average(Y.index[i * window:(i + 1) * window - 1]))
+    F = np.transpose(F)
+    for i in range(len(F)):
+        f.append(mean(F[i]))
+    return (t, f, np.transpose(Cxy))
+
+def Coherence(X, Y):
+    X = X.dropna()
+    Y = Y.dropna()
+    fs = 1/ (X.index[1]-X.index[0])
+    f, Cxy = signal.coherence(X, Y, fs, nperseg=2**7)
+    y = pd.Series(data = Cxy, index= f)
+    return (y)
+
+def n_Grad(n_sep, Sol_width):
+    n_SOL = n_sep / np.e
+    A = n_sep
+    B = -np.log(n_SOL / A) / Sol_width
+    r = np.linspace(0, Sol_width, 20)
+    print("Градиент в центре SOL:", -A * B * np.exp(-B * (Sol_width - 0.01)))
+    print("Плотность в центре SOL:", A *np.exp(-B * (Sol_width - 0.01)))
+    plt.plot(A *np.exp(-B * (Sol_width - 0.01)))
+    return (-A * B * np.exp(-B * (Sol_width - 0.01)) )
+
+def T_e (Name):
+    data = open(Name, 'r').readlines()
+    # for i in range (len(data)):
+    #    print(data[i])
+
+    M = []
+    for i in range(len(data)):
+        M.append(data[i].split(','))
+        # print(len(M[i]))
+    if (Name == '39169_T(t).txt'):
+        k = 13
+    else:
+        k = 3
+    M = np.transpose(M)
+    print("---------------------------------------------")
+    print(M[k][0])
+    t = []
+    T = []
+
+    for i in range(2, len(M[0])):
+        if M[k][i] == ' --':
+            T.append(None)
+        else:
+            T.append(float(M[k][i])* 11604.51812)
+        t.append(float(M[0][i])/1000)
+    X = pd.Series(data=T, index=t)
+    X = X.dropna()
+    return (X)
+
+#-------------------------------------------------------------запись из файла----------------------------------------------------------------------------------------
+
+name = Name(charge)
+
+I_sat = pd.Series(data=Data(name[0])[1], index=Data(name[0])[0])  # Ток насыщения, [A]
+phi1 = pd.Series(data=Data(name[0])[2], index=Data(name[0])[0])  # первый потенциал [B]
+phi2 = pd.Series(data=Data(name[0])[3], index=Data(name[0])[0])  # второй потенциал [B]
+d_alpha = pd.Series(data=CombData(name[1])[1], index=CombData(name[1])[0])
+Nl42 = pd.Series(data=CombData(name[2])[1], index=CombData(name[2])[0])
+Nl42 = (Nl42 * (10 ** 14)).where((Nl42.index < I_sat.index[int(len(I_sat) - 1)]) & (Nl42.index > I_sat.index[0]))  # Nl42 [1/м^2]
+Nl42 = Nl42.dropna()
+I_p = pd.Series(data=CombData(name[3])[1], index=CombData(name[3])[0]) # Ток по плазме [A]
+I_p = I_p.where((I_p.index < I_sat.index[int(len(I_sat) - 1)]) & (I_p.index > I_sat.index[0]))
+I_p = I_p.dropna()
+
+I_tor = name[5]
+P_SOL = name[4]*0.85 #мощность через сепаратрису [Вт]
+print(P_SOL)
+Sol_width=(2.7 * 1000 * (((1 + elongation ** 2) / 2) ** (-0.45)) * ((I_p) ** (-0.9)) * ((P_SOL) ** (-0.02)) * ((a ** 1.3) / (R ** 0.36)) * (21 / 4))
+print(Sol_width)
+####################################################################  ЗДЕСЬ ИСПРАВИТЬ B_tor #########################################
+
+#B_tor = pd.Series(data=[0.5]*len(I_sat), index=I_sat.index) # поле в SOL [Tл]
+B_tor =  ((2*10**(-7)) * 16 * I_tor )/ 0.58
+B_pol = 0.2
+B = np.sqrt(B_tor**2 + B_pol**2)
+print('#', charge)
+print("I_tor", I_tor)
+print('B_tor', B_tor)
+print('B_pol', B_pol)
+print('B', B)
+#####################################################################################################################################
+
+if charge == 39169:
+    E = (phi1- phi2)/deltaX
+else:
+    E = (phi2- phi1)/deltaX
+#---------------------------------------------------------- Вычисление плотности ----------------------------------------------------------------------------------------
+
+Te = T_e(Name=Name(charge)[6])
+val = 0
+n= []
+
+for i in range (len(I_sat)):
+    if ( Te.index[val] > I_sat.index[i]):
+        n.append((I_sat[I_sat.index[i]])/(0.5 * A*e*np.sqrt(k*2*Te[Te.index[val]]/mi))) #[1/м^3]
+    else:
+        val = val + 1
+        n.append((I_sat[I_sat.index[i]])/(0.5 * A*e*np.sqrt(k*2*Te[Te.index[val]]/mi))) #[1/м^3]
+n = pd.Series(data = n, index=I_sat.index)
+
+
+#-----------------------------------------------------------Вычисление средних----------------------------------------------------------------------------------------
+roll_I_sat = Roll(X=I_sat,tau=tau,by=1)
+roll_E =     Roll(X=E,    tau=tau,by=1)
+roll_n =     Roll(X=n,    tau=tau,by=1)
+roll_phi1 =  Roll(X=phi1, tau=tau,by=1)
+roll_phi2 =  Roll(X=phi2, tau=tau,by=1)
+#-------------------------------------------------------------- флуктуации -------------------------------------------------------------------------------
+
+E_fluc = -roll_E + E
+n_fluc = -roll_n + n
+fluc_phi1 = phi1 - roll_phi1
+fluc_phi1 = fluc_phi1.dropna()
+fluc_phi2 = phi2 - roll_phi2
+fluc_phi2 = fluc_phi1.dropna()
+#--------------------------------------------------------------вычисление потока-------------------------------------------------------------------------------------------
+Flux = Roll(X=(E_fluc * n_fluc)/B, tau=tau, by = math.ceil(h/(E_fluc.index[1]-E_fluc.index[0]))) #поток [1/(м^2 * c)]
+
+
+#------------------------------------------------------------------ Диффузия -----------------------------------------------------------------------------------------------
+#[grad_n, n_R] = n_Grad(n_sep=((Nl42)/180)*(100**3), Sol_width = Sol_width)
+grad_n= n_Grad(n_sep=((Nl42)/180)*(100**3), Sol_width = Sol_width)
+D = []
+for i in range (len(Flux)):
+    D.append(-(Flux[Flux.index[i]])/grad_n[np.round(Flux.index[i],5)])
+D = pd.Series(data=D, index = Flux.index)
+
+#============================================= спектральные характеристики плавающего потенциала ====================================================
+
+PSD_n_fluc = PSD (n_fluc)
+PSD_E_fluc = PSD (E_fluc)
+[t_fluc_phi1_spec, f_fluc_phi1_spec, Sxx_fluc_phi1_spec ] = spec(fluc_phi1)
+#________________________________________________________ Корелляция и Когерентность __________________________________________________________________________
+
+corr_n_fluc_E_fluc = Corr(E_fluc,n_fluc)
+coh= Coherence(E_fluc, n_fluc)
+[t_n_fluc_E_fluc_Coh,f_n_fluc_E_fluc_Coh, y_n_fluc_E_fluc_Coh] = Coh_spectr(E_fluc, n_fluc, window=2**12)
+
+#============================================================ построение графиков ===============================================================
+def Plttr (X, fig_num = 0,  rows = 1, cols = 1 ,subplot_num = 1, New = True, Ticks = True, Xlabel = 'Xlabel', Ylabel = 'Ylabel', width = 6.5, height = 5, left = 0, right = 1, Name = 'Label', Title = 0, ratio = 1 ):
+    if (right == 1)&(left == 0):
+        right = max(X.index)
+        left = min(X.index)
+    X = X.where((X.index < right)&(X.index > left))
+    X = X.dropna()
+    Xticks = float(f'{((max(X.index)-min(X.index))*ratio/5):.0e}')
+    Yticks = float(f'{((max(X.values)-min(X.values))/5):.0e}')
+    fig = plt.figure(fig_num, figsize=(width, height))
+    if New == True:
+        ax = fig.add_subplot(rows, cols ,subplot_num)
+        plt.ylabel(Ylabel)
+        ax.xaxis.set_major_locator(MultipleLocator(Xticks))
+        ax.xaxis.set_minor_locator(MultipleLocator(Xticks/2))
+        ax.yaxis.set_major_locator(MultipleLocator(Yticks))
+        ax.yaxis.set_minor_locator(MultipleLocator(Yticks/2))
+        plt.grid(which='major', linewidth = 1)
+        plt.grid(which='minor', linewidth = 0.5)
+    else:
+        ax = plt.subplot(rows, cols ,subplot_num)
+    if Ticks == False:
+        ax = plt.gca()
+        ax.axes.xaxis.set_ticklabels([])
+    else:
+        plt.xlabel(Xlabel)
+    ax.plot(X.index*ratio, X.values, linewidth= 1)
+    ax.set_xlim(left*ratio, right*ratio)
+    #ax.legend(loc = 'upper right')
+    if Title != 0:
+        plt.title(Title, loc = 'right')
+
+#________________________________________________________НАЧАЛЬНЫЕ ДАННЫЕ_______________________________________________________________________________________________________________________________________________
+xmin=0.140 # [c]
+xmax=0.21 # [c]
+f_max = 100000 # [Гц]
+lbl_t = 'Время, мс'
+lbl_f = 'f, кГц'
+rate_ms = 1000 # коэффициент перевода секунды в милисекунды
+rate_Hz = .001 # коэффициент перевода Герцы в Килогерцы
+
+Plttr(X=I_sat,      fig_num=1, rows=3, subplot_num=1,            Ticks=False,  Xlabel=lbl_t, Ylabel='I, A', Name='I_', Title='a)', ratio=rate_ms)
+Plttr(X=roll_I_sat, fig_num=1, rows=3, subplot_num=1, New=False, Ticks=False,  Xlabel=lbl_t, Ylabel='I, A', Name='<I_>',           ratio=rate_ms)
+Plttr(X=phi1,       fig_num=1, rows=3, subplot_num=2,            Ticks=False,  Xlabel=lbl_t, Ylabel='U1, В', Name='U1', Title='б)', ratio=rate_ms)
+Plttr(X=roll_phi1,  fig_num=1, rows=3, subplot_num=2, New=False, Ticks=False,  Xlabel=lbl_t, Ylabel='U1, В', Name='<U1>',           ratio=rate_ms)
+Plttr(X=phi2,       fig_num=1, rows=3, subplot_num=3,            Ticks=True,   Xlabel=lbl_t, Ylabel='U2, В', Name='U2', Title='в)', ratio=rate_ms)
+Plttr(X=roll_phi2,  fig_num=1, rows=3, subplot_num=3, New=False, Ticks=True,   Xlabel=lbl_t, Ylabel='U2, В', Name='<U2>',           ratio=rate_ms)
+
+# _____________________________________________________ ПЛОТНОСТЬ, ПОЛЕ _________________________________________________________________________________________________________________________________________________
+
+Plttr(X=E/100,      fig_num=2, rows=2, subplot_num=1,            Ticks=False, Xlabel=lbl_t, Ylabel='E, В/cм',  height=4,  left=xmin, right=xmax, Name='E', Title='a)', ratio=rate_ms)
+Plttr(X=roll_E/100, fig_num=2, rows=2, subplot_num=1, New=False, Ticks=False, Xlabel=lbl_t, Ylabel='E, В/cм',  height=4,  left=xmin, right=xmax, Name='<E>',           ratio=rate_ms)
+Plttr(X=n/(100**3),      fig_num=2, rows=2, subplot_num=2,            Ticks=True,  Xlabel=lbl_t, Ylabel='n, cм^-3', height=4,  left=xmin, right=xmax, Name='n', Title='б)', ratio=rate_ms)
+Plttr(X=roll_n/(100**3), fig_num=2, rows=2, subplot_num=2, New=False, Ticks=True,  Xlabel=lbl_t, Ylabel='n, cм^-3', height=4,  left=xmin, right=xmax, Name='<n>',           ratio=rate_ms)
+
+Plttr(X=E_fluc/100, fig_num=3, rows=2, subplot_num=1,  Ticks=False, Xlabel=lbl_t, Ylabel='E, В/cм',  height=4,  left=xmin, right=xmax, Name='<E>', Title='a)', ratio=rate_ms)
+Plttr(X=n_fluc/(100**3), fig_num=3, rows=2, subplot_num=2,  Ticks=True,  Xlabel=lbl_t, Ylabel='n, cм^-3', height=4,  left=xmin, right=xmax, Name='<n>', Title='б)', ratio=rate_ms)
+
+#__________________________________________________________ ПОТОК _________________________________________________________________________________________________________________________________________________
+
+Plttr(X=Flux/(100**2),    fig_num=4, rows=3, subplot_num=1, Ticks=False, Xlabel=lbl_t, Ylabel='Г~, см^-2*c^-1',  left=xmin, right=xmax, Name='Г~',      Title='a)', ratio=rate_ms)
+Plttr(X=d_alpha, fig_num=4, rows=3, subplot_num=2, Ticks=False, Xlabel=lbl_t, Ylabel='D_alpha, В',            left=xmin, right=xmax, Name='D_alpha', Title='б)', ratio=rate_ms)
+Plttr(X=Nl42, fig_num=4, rows=3, subplot_num=3, Ticks=True, Xlabel=lbl_t, Ylabel='Nl42, 1/см^2', left=xmin, right=xmax, Name='Nl42 см(1.5 мм)', Title='в)', ratio=rate_ms)
+#__________________________________________________________ ИТОГ _________________________________________________________________________________________________________________________________________________
+
+Plttr(X=Flux/(100**2),    fig_num=123, rows=5, subplot_num=1, width = 6.5, height = 7.5, Ticks=False, Xlabel=lbl_t, Ylabel='Г~, см^-2*c^-1',  left=xmin, right=xmax, Name='Г~',      ratio=rate_ms)
+Plttr(X=0.06*Te/(B*11604.51812),                fig_num=123, rows=5, subplot_num=2, Ticks=False, Xlabel=lbl_t, Ylabel='D_Bohm, м^2/c',            left=xmin, right=xmax, Name='D_bohm',  ratio=rate_ms)
+Plttr(X=D,                fig_num=123, rows=5, subplot_num=3, Ticks=True, Xlabel=lbl_t, Ylabel='D_ES, м^2/c', left=xmin, right=xmax, Name='I',  ratio=rate_ms)
+Plttr(X=Te/11604.51812 ,fig_num=123, rows=5, subplot_num=4, Ticks=False, Xlabel=lbl_t, Ylabel='Te, эв', left=xmin, right=xmax, Name='Nl42 см(1.5 мм)',  ratio=rate_ms)
+Plttr(X=I_p/1000,              fig_num=123, rows=5, subplot_num=5, Ticks=False, Xlabel=lbl_t, Ylabel='I_p, кA', left=xmin, right=xmax, Name='I',  ratio=rate_ms)
+
+# ____________________________________________ СПЕКТРАЛЬНАЯ ПЛОТНОСТЬ МОЩНОСТИ  ________________________________________________________________________________________________________________________________________________
+
+Plttr(X=PSD_E_fluc, fig_num=5, rows=2, subplot_num=1, Ticks=False, Xlabel=lbl_f, Ylabel='PSD, отн.ед', width=5, height = 4, right=f_max*5, Name='PSD E~', Title='a)', ratio=rate_Hz)
+Plttr(X=PSD_n_fluc, fig_num=5, rows=2, subplot_num=2, Ticks=True,  Xlabel=lbl_f, Ylabel='PSD, отн.ед', width=5, height = 4, right=f_max*5, Name='I_sat',  Title='б)', ratio=rate_Hz)
+
+# ________________________________________________________ КОРРЕЛЯЦИЯ  _________________________________________________________________________________________________________________________________________________
+
+Plttr(X=Flux/(100**2),    fig_num=6, rows=2, subplot_num=1, Ticks=False, Xlabel=lbl_t, Ylabel='Г~, см^-2*c^-1',  left=xmin, right=xmax, Name='Г~',      Title='a)', ratio=rate_ms)
+Plttr(X=corr_n_fluc_E_fluc.rolling(window=3000 * 2, center=True).mean(), fig_num=6, rows=2, cols=1, subplot_num=2, Ticks=True, Xlabel=lbl_t, Ylabel='CnE',  left=xmin, right=xmax, width=5, height = 4, Name='<С_En>', Title='б)', ratio=rate_ms)
+Plttr(X=coh, fig_num=7, rows=1, cols=1, subplot_num=1, Ticks=True, Xlabel=lbl_f, Ylabel='y', width=5, height = 4, Name='<С_En>', ratio=rate_Hz)
+
+# ====================================================== Построение спектров =============================================================================================
+def Plttr_spec(x , y, z, fig_num = 0,  Title = 0, Xlabel = 'Xlabel', Ylabel = 'Ylabel', width= 4 , height = 6, left = 0, right = 1, down =0, up = 1, Vmax = 1, c_map = 'plasma', ratio_x = 1, ratio_y = 1):
+    if (left == 0)& (right == 1):
+        left = min(x)
+        right = max(x)
+    if (down == 0)&(up == 1):
+        down = min(y)
+        up = max(y)
+    Xticks = float(f'{((right-left)*ratio_x/12):.0e}')
+    Yticks = float(f'{((up-down)*ratio_y/12):.0e}')
+    plt.figure(fig_num, figsize=(width, height))
+    ax = plt.figure(fig_num).add_subplot(111)
+    if Title!= 0:
+        ax.set_title(Title)
+
+    ax.set_xlabel(Xlabel)
+    ax.set_ylabel(Ylabel)
+    ax.xaxis.set_major_locator(MultipleLocator(Xticks))
+    ax.xaxis.set_minor_locator(MultipleLocator(Xticks / 5))
+    ax.yaxis.set_major_locator(MultipleLocator(Yticks))
+    ax.yaxis.set_minor_locator(MultipleLocator(Yticks / 5))
+
+    plt.ylim(down*ratio_y, up*ratio_y)
+    plt.xlim(left* ratio_x, right* ratio_x)
+    plt.pcolormesh(
+        np.array(x) * ratio_x,
+        np.array(y) * ratio_y,
+        np.array(z),
+        shading='gouraud',
+        cmap=c_map,
+        vmax=Vmax
+    )
+    plt.colorbar()
+
+#_______________________________________________________ ПЛАВАЮЩИЙ ПОТЕНЦИАЛ __________________________________________________________________________________________
+Plttr_spec(x=t_fluc_phi1_spec, y=f_fluc_phi1_spec, z=Sxx_fluc_phi1_spec, fig_num=8, Xlabel=lbl_t, Ylabel=lbl_f, width=6, height=4, Vmax=1, up = 500000, left=xmin, right=xmax-0.01, ratio_x = rate_ms, ratio_y = rate_Hz)
+
+#_______________________________________________________ КОГЕРЕНТНОСТЬ n И E __________________________________________________________________________________________
+Plttr_spec(x=t_n_fluc_E_fluc_Coh, y=f_n_fluc_E_fluc_Coh, z=y_n_fluc_E_fluc_Coh, fig_num=9, Xlabel=lbl_t, Ylabel= lbl_f, width=9, height=4, Vmax=0.5, ratio_x = rate_ms, ratio_y = rate_Hz,
+           left=xmin, right=xmax-0.01,
+           up = 500000
+           )
+print(charge)
+
+plt.show()
+
